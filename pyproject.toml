@@ -1,0 +1,17 @@
+[project]
+name = "multiplayer-game-python"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "chess>=1.11.2",
+    "fastapi>=0.141.1",
+    "firebase-admin>=7.5.0",
+    "google>=3.0.0",
+    "google-auth>=2.56.3",
+    "python-dotenv>=1.2.3",
+    "requests>=2.34.2",
+    "uvicorn>=0.52.3",
+    "websockets>=17.0.1",
+]

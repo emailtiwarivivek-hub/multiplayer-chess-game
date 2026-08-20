@@ -1,0 +1,24 @@
+# Secrets - NEVER commit these
+.env
+serviceAccountKey.json
+*firebase-adminsdk*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# uv
+.uv/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

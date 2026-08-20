@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knight Club</title>
+
+<!-- Tailwind v4 -->
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+
+<!-- React 18 + Babel Standalone -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<!-- Google Identity Services (the "Sign in with Google" button + JS API) -->
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --color-night:       #171b21;
+    --color-panel:       #232830;
+    --color-edge:        #333b46;
+    --color-chalk:       #eceef1;
+    --color-board-light: #f0d9b5;
+    --color-board-dark:  #b58863;
+    --color-gold:        #d9a441;
+    --color-danger:      #d2543c;
+
+    --font-display: "Playfair Display", Georgia, serif;
+    --font-body:    "Inter", system-ui, sans-serif;
+  }
+
+  body {
+    background: radial-gradient(80% 50% at 50% 0%, #202730 0%, var(--color-night) 70%);
+    min-height: 100vh;
+    font-family: var(--font-body);
+    color: var(--color-chalk);
+  }
+
+  .bg-board-light { background-color: var(--color-board-light); }
+  .bg-board-dark  { background-color: var(--color-board-dark); }
+  .bg-panel       { background-color: var(--color-panel); }
+  .bg-night       { background-color: var(--color-night); }
+  .bg-gold        { background-color: var(--color-gold); }
+  .border-edge    { border-color: var(--color-edge); }
+  .text-chalk     { color: var(--color-chalk); }
+  .text-gold      { color: var(--color-gold); }
+  .text-danger    { color: var(--color-danger); }
+  .text-night     { color: var(--color-night); }
+  .font-display   { font-family: var(--font-display); }
+  .font-body      { font-family: var(--font-body); }
+</style>
+</head>
+
+<body class="flex justify-center px-4 pt-6 pb-12">
+<div id="root" class="w-full max-w-4xl"></div>
+
+<script type="text/babel">
+const BACKEND = 'http://127.0.0.1:8000';
+const WS_URL  = BACKEND.replace(/^http(s?):/, 'ws$1:');
+
+const { useState, useEffect, useRef } = React;
+
+const FILES = 'abcdefgh';
+const GLYPH = { k: '\u265A', q: '\u265B', r: '\u265C', b: '\u265D', n: '\u265E', p: '\u265F' };
+
+function parseFen(fen) {
+  const squares = [];
+  for (const row of fen.split(' ')[0].split('/')) {
+    for (const ch of row) {
+      if (ch >= '1' && ch <= '8') {
+        for (let i = 0; i < Number(ch); i++) squares.push(null);
+      } else {
+        squares.push(ch);
+      }
+    }
+  }
+  return squares;
+}
+
+const squareName = (i) => FILES[i % 8] + (8 - Math.floor(i / 8));
+const isWhitePiece = (p) => p === p.toUpperCase();
+
+function Square({ index, piece, orientation, selected, isTarget, isLast, isCheck, onClick }) {
+  const file = index % 8;
+  const rank = Math.floor(index / 8);
+  const light = (file + rank) % 2 === 0;
+
+  const showFile = orientation === 'white' ? rank === 7 : rank === 0;
+  const showRank = orientation === 'white' ? file === 0 : file === 7;
+
+  return (
+    <button
+      onClick={() => onClick(index)}
+      className={`relative flex items-center justify-center select-none w-full h-full ${
+        light ? 'bg-board-light' : 'bg-board-dark'
+      }`}
+    >
+      {isLast && <div className="absolute inset-0 bg-amber-400/40" />}
+      {isCheck && <div className="absolute inset-0 bg-red-600/55" />}
+      {selected && <div className="absolute inset-0 ring-4 ring-inset ring-amber-400" />}
+
+      {piece && (
+        <span className={`relative text-4xl sm:text-5xl leading-none ${
+          isWhitePiece(piece)
+            ? 'text-[#fbf8f2] drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]'
+            : 'text-[#26221e] drop-shadow-[0_1px_1px_rgba(255,255,255,0.25)]'
+        }`}>
+          {GLYPH[piece.toLowerCase()]}
+        </span>
+      )}
+
+      {isTarget && !piece && (
+        <div className="absolute h-1/4 w-1/4 rounded-full bg-black/35" />
+      )}
+      {isTarget && piece && (
+        <div className="absolute inset-0 ring-4 ring-inset ring-black/35" />
+      )}
+
+      {showFile && (
+        <span className={`absolute bottom-0.5 right-1 text-[10px] font-medium ${
+          light ? 'text-[#b58863]' : 'text-[#f0d9b5]'
+        }`}>
+          {FILES[file]}
+        </span>
+      )}
+      {showRank && (
+        <span className={`absolute top-0.5 left-1 text-[10px] font-medium ${
+          light ? 'text-[#b58863]' : 'text-[#f0d9b5]'
+        }`}>
+          {8 - rank}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function Board({ fen, orientation, legal, selected, lastMove, check, turn, onSquare }) {
+  const squares = parseFen(fen);
+
+  const targets = selected
+    ? legal.filter(m => m.slice(0, 2) === selected).map(m => m.slice(2, 4))
+    : [];
+
+  const kingChar = turn === 'white' ? 'K' : 'k';
+  const checkIndex = check ? squares.indexOf(kingChar) : -1;
+
+  const order = squares.map((_, i) => i);
+  if (orientation === 'black') order.reverse();
+
+  return (
+    <div
+      className="grid grid-cols-8 aspect-square w-full overflow-hidden rounded-lg border border-edge shadow-2xl"
+      style={{ gridTemplateRows: 'repeat(8, 1fr)' }}
+    >
+      {order.map(i => {
+        const name = squareName(i);
+        return (
+          <Square
+            key={i}
+            index={i}
+            piece={squares[i]}
+            orientation={orientation}
+            selected={selected === name}
+            isTarget={targets.includes(name)}
+            isLast={lastMove && (lastMove.slice(0, 2) === name || lastMove.slice(2, 4) === name)}
+            isCheck={i === checkIndex}
+            onClick={() => onSquare(name)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function PromotionPicker({ color, onPick, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60" onClick={onCancel}>
+      <div className="rounded-xl border border-edge bg-panel p-4" onClick={e => e.stopPropagation()}>
+        <p className="mb-3 text-center text-sm text-slate-400">Promote to</p>
+        <div className="flex gap-2">
+          {['q', 'r', 'b', 'n'].map(p => (
+            <button
+              key={p}
+              onClick={() => onPick(p)}
+              className="flex h-16 w-16 items-center justify-center rounded-lg bg-board-light text-4xl hover:bg-gold text-[#26221e]"
+            >
+              {GLYPH[p]}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MoveList({ history }) {
+  const pairs = [];
+  for (let i = 0; i < history.length; i += 2) {
+    pairs.push([i / 2 + 1, history[i], history[i + 1]]);
+  }
+  return (
+    <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border border-edge bg-night/50 p-2">
+      {pairs.length === 0 && <p className="p-2 text-sm text-slate-500">No moves yet.</p>}
+      {pairs.map(([n, white, black]) => (
+        <div key={n} className="flex gap-3 px-2 py-0.5 text-sm">
+          <span className="w-6 text-right text-slate-500">{n}.</span>
+          <span className="w-16">{white}</span>
+          <span className="w-16">{black || ''}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Higher-value pieces first, just for a tidier row of icons.
+const PIECE_ORDER = { q: 0, r: 1, b: 2, n: 3, p: 4 };
+const sortCaptured = (list) => [...list].sort((a, b) => PIECE_ORDER[a] - PIECE_ORDER[b]);
+
+// One row of little captured-piece glyphs. `pieceColor` is the color the
+// captured pieces actually were (opponent's pieces if this is under your
+// own name, since those are the ones you took).
+function CapturedRow({ pieces, pieceColor }) {
+  if (!pieces || pieces.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-0.5 mt-1">
+      {sortCaptured(pieces).map((p, i) => (
+        <span
+          key={i}
+          className={`text-base leading-none ${
+            pieceColor === 'white' ? 'text-[#e9e6df]' : 'text-[#5b5147]'
+          }`}
+        >
+          {GLYPH[p]}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Shows this player's finished games, read back out of Firestore through
+// the /api/games/<id> endpoint. Each game document stores both players'
+// IDs and the result, so we work out "did I win?" by checking which side
+// this player was on.
+function GameHistory({ googleId, onClose }) {
+  const [games, setGames]   = useState(null);   // null = still loading
+  const [error, setError]   = useState('');
+
+  useEffect(() => {
+    if (!googleId) { setError('No player ID available.'); return; }
+
+    fetch(`${BACKEND}/api/games/${googleId}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.database) { setError('No database is connected.'); return; }
+        if (data.error)     { setError('Query failed - check the server terminal.'); return; }
+        setGames(data.games || []);
+      })
+      .catch(() => setError('Could not reach the backend.'));
+  }, [googleId]);
+
+  // result is "1-0" (white won), "0-1" (black won) or "1/2-1/2" (draw).
+  function outcomeFor(game) {
+    if (game.result === '1/2-1/2') return { text: 'Draw', cls: 'text-slate-400' };
+    const iWasWhite = game.white && game.white.id === googleId;
+    const whiteWon  = game.result === '1-0';
+    const iWon      = iWasWhite === whiteWon;
+    return iWon
+      ? { text: 'Won',  cls: 'text-gold' }
+      : { text: 'Lost', cls: 'text-danger' };
+  }
+
+  function opponentOf(game) {
+    const iWasWhite = game.white && game.white.id === googleId;
+    const other = iWasWhite ? game.black : game.white;
+    return (other && other.name) || 'Unknown';
+  }
+
+  function dateOf(game) {
+    if (!game.finished_at) return '';
+    return new Date(game.finished_at).toLocaleDateString();
+  }
+
+  return (
+    <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg rounded-xl border border-edge bg-panel p-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-display text-2xl">Your games</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-chalk">Close</button>
+        </div>
+
+        {error && <p className="py-6 text-center text-sm text-danger">{error}</p>}
+
+        {!error && games === null && (
+          <p className="py-6 text-center text-sm text-slate-500">Loading...</p>
+        )}
+
+        {!error && games && games.length === 0 && (
+          <p className="py-6 text-center text-sm text-slate-500">
+            No finished games saved yet.
+          </p>
+        )}
+
+        {!error && games && games.length > 0 && (
+          <div className="max-h-96 overflow-y-auto">
+            {games.map((game, i) => {
+              const outcome = outcomeFor(game);
+              return (
+                <div key={i} className="flex items-center justify-between border-b border-edge py-2.5 text-sm last:border-0">
+                  <div>
+                    <span className={`font-medium ${outcome.cls}`}>{outcome.text}</span>
+                    <span className="text-slate-400"> vs {opponentOf(game)}</span>
+                    <div className="text-xs text-slate-600">
+                      {game.reason} &middot; {game.move_count} moves
+                    </div>
+                  </div>
+                  <span className="text-xs text-slate-600">{dateOf(game)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Panel({ you, opponent, opponentPicture, color, turn, yourTurn, check, over, history, captured, onResign, onShowHistory }) {
+  const [confirming, setConfirming] = useState(false);
+
+  let line;
+  if (over) line = over;
+  else if (check) line = yourTurn ? 'You are in check' : 'Check';
+  else line = yourTurn ? 'Your move' : `Waiting for ${opponent}`;
+
+  const opponentColor = color === 'white' ? 'black' : 'white';
+  // Pieces you captured are opponent-colored pieces, taken off by "color".
+  const yourCaptures = (captured && captured[color]) || [];
+  // Pieces the opponent captured are your-colored pieces, taken off by "opponentColor".
+  const opponentCaptures = (captured && captured[opponentColor]) || [];
+
+  return (
+    <div className="md:w-64 shrink-0">
+      <div className="rounded-xl border border-edge bg-panel p-4">
+        <div className="flex items-center justify-between text-sm">
+          <span className="flex items-center gap-2 text-slate-400">
+            {opponentPicture && (
+              <img src={opponentPicture} referrerPolicy="no-referrer" className="h-5 w-5 rounded-full" />
+            )}
+            {opponent}
+          </span>
+          <span className="text-slate-500">{opponentColor}</span>
+        </div>
+        <CapturedRow pieces={opponentCaptures} pieceColor={color} />
+
+        <hr className="my-3 border-edge" />
+
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-medium">{you} (you)</span>
+          <span className="text-slate-500">{color}</span>
+        </div>
+        <CapturedRow pieces={yourCaptures} pieceColor={opponentColor} />
+      </div>
+
+      <p className={`mt-4 text-center font-display text-lg ${
+        check && !over ? 'text-danger' : yourTurn || over ? 'text-gold' : 'text-slate-400'
+      }`}>
+        {line}
+      </p>
+
+      <MoveList history={history} />
+
+      {!over && (
+        <button
+          onClick={() => (confirming ? onResign() : setConfirming(true))}
+          className="mt-3 w-full rounded-lg border border-edge py-2 text-sm text-slate-400 transition hover:border-danger hover:text-danger"
+        >
+          {confirming ? 'Click again to confirm' : 'Resign'}
+        </button>
+      )}
+
+      {over && (
+        <button
+          onClick={onShowHistory}
+          className="mt-3 w-full rounded-lg border border-edge py-2 text-sm text-slate-400 transition hover:border-gold hover:text-gold"
+        >
+          View your games
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Lobby({ onJoin, status, error, startingFen, library, googleClientId, myId, onShowHistory }) {
+  const buttonRef = useRef(null);
+
+  // Renders the real Google "Sign in with Google" button into buttonRef.
+  // window.google is provided by the gsi/client script tag in <head>.
+  useEffect(() => {
+    if (error || !googleClientId || !window.google || !buttonRef.current) return;
+
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: (response) => onJoin(response.credential),
+    });
+
+    window.google.accounts.id.renderButton(buttonRef.current, {
+      theme: 'filled_black',
+      size: 'large',
+      shape: 'pill',
+      text: 'signin_with',
+      width: 260,
+    });
+  }, [error, googleClientId]);
+
+  return (
+    <div className="mx-auto max-w-md">
+      <h1 className="text-center font-display text-4xl font-bold">Knight Club</h1>
+      <p className="mt-1 mb-6 text-center text-sm text-slate-400">
+        Two players, one board. Every move checked on the server.
+      </p>
+
+      {startingFen && (
+        <div className="mb-6 opacity-70">
+          <Board
+            fen={startingFen}
+            orientation="white"
+            legal={[]}
+            selected={null}
+            lastMove={null}
+            check={false}
+            turn="white"
+            onSquare={() => {}}
+          />
+        </div>
+      )}
+
+      <div className="flex flex-col items-center gap-3 rounded-xl border border-edge bg-panel p-5">
+        {!error && <div ref={buttonRef} />}
+        {status && <p className="text-sm text-slate-400">{status}</p>}
+        {!googleClientId && !error && (
+          <p className="text-center text-xs text-slate-500">
+            Waiting for backend config...
+          </p>
+        )}
+
+        {myId && (
+          <button
+            onClick={onShowHistory}
+            className="w-full rounded-lg border border-edge py-2 text-sm text-slate-400 transition hover:border-gold hover:text-gold"
+          >
+            View your games
+          </button>
+        )}
+      </div>
+
+      {error && <p className="mt-3 text-center text-sm text-danger">{error}</p>}
+      {library && <p className="mt-5 text-center text-xs text-slate-600">Moves validated by {library}</p>}
+    </div>
+  );
+}
+
+function App() {
+  const [info, setInfo]       = useState(null);
+  const [error, setError]     = useState('');
+  const [status, setStatus]   = useState('');
+  const [game, setGame]       = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [promo, setPromo]     = useState(null);
+  const [notice, setNotice]   = useState('');
+  const [over, setOver]       = useState('');
+  const [showHistory, setShowHistory] = useState(false);
+  // The signed-in player's own Google ID. Arrives from the server either
+  // when they start waiting for an opponent, or when a game begins.
+  const [myId, setMyId] = useState(null);
+
+  const socket = useRef(null);
+
+  useEffect(() => {
+    fetch(BACKEND + '/api/info')
+      .then(r => r.json())
+      .then(setInfo)
+      .catch(() => setError(`Cannot reach the backend at ${BACKEND} - is main.py running?`));
+  }, []);
+
+  useEffect(() => () => socket.current && socket.current.close(), []);
+
+  function handle(m) {
+    if (m.type === 'waiting') {
+      setStatus('Looking for an opponent...');
+      if (m.your_id) setMyId(m.your_id);
+    } else if (m.type === 'start') {
+      if (m.your_id) setMyId(m.your_id);
+      setGame({ color: m.color, you: m.you, opponent: m.opponent, opponentPicture: m.opponent_picture, ...m });
+    } else if (m.type === 'state') {
+      setGame(g => ({ ...g, ...m }));
+      setSelected(null);
+      setNotice('');
+    } else if (m.type === 'illegal') {
+      setNotice(m.reason);
+      setSelected(null);
+    } else if (m.type === 'game_over') {
+      const word = { win: 'You won', lose: 'You lost', draw: 'Draw' }[m.you];
+      setOver(`${word} - ${m.reason} (${m.result})`);
+      setGame(g => ({ ...g, your_turn: false, legal: [] }));
+    } else if (m.type === 'opponent_left') {
+      setOver('Opponent left the game');
+      setGame(g => ({ ...g, your_turn: false, legal: [] }));
+    } else if (m.type === 'auth_error') {
+      setStatus('');
+      setError(m.reason);
+      if (socket.current) socket.current.close();
+    }
+  }
+
+  // `credential` is the Google ID token handed to us by the Sign In With
+  // Google button - we just forward it to the backend, which is the party
+  // that actually verifies it.
+  function join(credential) {
+    setStatus('Connecting...');
+    const ws = new WebSocket(WS_URL + '/ws');
+    socket.current = ws;
+    ws.onopen    = () => ws.send(JSON.stringify({ type: 'join', credential }));
+    ws.onmessage = e => handle(JSON.parse(e.data));
+    ws.onerror   = () => { setStatus(''); setError('Connection failed. Is the backend running?'); };
+    ws.onclose   = () => setOver(o => o || 'Disconnected');
+  }
+
+  function send(uci) {
+    socket.current.send(JSON.stringify({ type: 'move', uci }));
+  }
+
+  function clickSquare(name) {
+    if (!game || !game.your_turn) return;
+
+    if (selected) {
+      const moves = game.legal.filter(
+        m => m.slice(0, 2) === selected && m.slice(2, 4) === name
+      );
+
+      if (moves.length === 1) { send(moves[0]); setSelected(null); return; }
+      if (moves.length > 1)   { setPromo({ from: selected, to: name }); return; }
+    }
+
+    const piece = parseFen(game.fen)[
+      (8 - Number(name[1])) * 8 + FILES.indexOf(name[0])
+    ];
+    const mine = piece &&
+      (game.color === 'white' ? isWhitePiece(piece) : !isWhitePiece(piece));
+    setSelected(mine ? name : null);
+  }
+
+  if (!game) {
+    return (
+      <div>
+        <Lobby
+          onJoin={join}
+          status={status}
+          error={error}
+          startingFen={info && info.starting_fen}
+          library={info && info.library}
+          googleClientId={info && info.google_client_id}
+          myId={myId}
+          onShowHistory={() => setShowHistory(true)}
+        />
+        {showHistory && (
+          <GameHistory googleId={myId} onClose={() => setShowHistory(false)} />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h1 className="mb-5 text-center font-display text-3xl font-bold">Knight Club</h1>
+
+      <div className="flex flex-col gap-5 md:flex-row">
+        <div className="mx-auto w-full max-w-[560px]">
+          <Board
+            fen={game.fen}
+            orientation={game.color}
+            legal={game.legal || []}
+            selected={selected}
+            lastMove={game.last_move}
+            check={game.check}
+            turn={game.turn}
+            onSquare={clickSquare}
+          />
+          {notice && <p className="mt-2 text-center text-sm text-danger">{notice}</p>}
+        </div>
+
+        <Panel
+          you={game.you}
+          opponent={game.opponent}
+          opponentPicture={game.opponentPicture}
+          color={game.color}
+          turn={game.turn}
+          yourTurn={game.your_turn}
+          check={game.check}
+          over={over}
+          history={game.history || []}
+          captured={game.captured}
+          onResign={() => socket.current.send(JSON.stringify({ type: 'resign' }))}
+          onShowHistory={() => setShowHistory(true)}
+        />
+      </div>
+
+      {showHistory && (
+        <GameHistory
+          googleId={game.your_id || myId}
+          onClose={() => setShowHistory(false)}
+        />
+      )}
+
+      {promo && (
+        <PromotionPicker
+          color={game.color}
+          onCancel={() => setPromo(null)}
+          onPick={piece => { send(promo.from + promo.to + piece); setPromo(null); setSelected(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
