@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+python-chess
+google-auth
+python-dotenv
+firebase-admin
