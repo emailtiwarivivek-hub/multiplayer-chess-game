@@ -50,21 +50,27 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 FIREBASE_KEY_PATH = os.environ.get("FIREBASE_KEY_PATH", "serviceAccountKey.json")
 
-# `db` stays None if Firebase isn't set up, and every helper below checks
-# for that. The game still works fine without a database - you just don't
-# get saved history. This keeps the app runnable for anyone who clones it
-# without your private key.
+# On a hosting platform you can't upload a file, so the whole key JSON is
+# pasted into an environment variable instead. Locally the file is used.
+FIREBASE_KEY_JSON = os.environ.get("FIREBASE_KEY_JSON", "")
+
 db = None
 
-if os.path.exists(FIREBASE_KEY_PATH):
-    try:
+try:
+    if FIREBASE_KEY_JSON:
+        import json
+        cred = credentials.Certificate(json.loads(FIREBASE_KEY_JSON))
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("Firestore connected (from environment variable).")
+    elif os.path.exists(FIREBASE_KEY_PATH):
         firebase_admin.initialize_app(credentials.Certificate(FIREBASE_KEY_PATH))
         db = firestore.client()
-        print("Firestore connected.")
-    except Exception as exc:
-        print("Firestore setup failed, running without a database:", exc)
-else:
-    print(f"No {FIREBASE_KEY_PATH} found - running without a database.")
+        print("Firestore connected (from key file).")
+    else:
+        print("No Firebase credentials found - running without a database.")
+except Exception as exc:
+    print("Firestore setup failed, running without a database:", exc)
 
 
 def _save_user_blocking(google_id, name, email, picture):
@@ -500,4 +506,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # Hosting platforms assign a port and pass it in as $PORT. Locally
+    # there's no such variable, so we fall back to 8000.
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

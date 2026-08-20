@@ -61,8 +61,12 @@
 <div id="root" class="w-full max-w-4xl"></div>
 
 <script type="text/babel">
-const BACKEND = 'http://127.0.0.1:8000';
-const WS_URL  = BACKEND.replace(/^http(s?):/, 'ws$1:');
+// Empty string means "same server that served this page", so the app works
+// unchanged whether it's running on localhost or a deployed domain.
+// If you're serving index.html separately (e.g. python -m http.server 3000)
+// while the backend runs on port 8000, set this to 'http://127.0.0.1:8000'.
+const BACKEND = '';
+const WS_URL  = (BACKEND || window.location.origin).replace(/^http(s?):/, 'ws$1:');
 
 const { useState, useEffect, useRef } = React;
 
